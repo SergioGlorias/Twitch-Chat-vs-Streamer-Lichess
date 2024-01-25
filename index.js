@@ -48,7 +48,7 @@ http.listen(port, () => {
 // ------------------------------------------------------------
 
 // module to send http requests / communicate with the lichess api
-const https = require('https');
+const https = require('node:https');
 
 // twitch messaging interface module
 const tmi = require('tmi.js');
@@ -101,7 +101,10 @@ function isDrawOffer(message) {
   return (
     message.toLowerCase().trim() === 'offer draw' ||
     message.toLowerCase().trim() === 'accept draw' ||
-    message.toLowerCase().trim() === 'offer/accept draw'
+    message.toLowerCase().trim() === 'offer/accept draw' ||
+    message.toLowerCase().trim() === 'oferecer empate' ||
+    message.toLowerCase().trim() === 'aceitar empate' ||
+    message.toLowerCase().trim() === 'oferecer/aceitar empate'
   );
 }
 function checkMove(possibleMove, gameId) {
@@ -110,7 +113,7 @@ function checkMove(possibleMove, gameId) {
     chess.move(move, { sloppy: true });
   }
   let result;
-  if (possibleMove.toLowerCase().trim() === 'resign') return 'resign';
+  if (['resign', 'desistir'].includes(possibleMove.toLowerCase().trim())) return 'resign';
   else if (isDrawOffer(possibleMove)) return 'draw';
   else if ((result = chess.move(possibleMove, { sloppy: true }))) return result;
   else return chess.move(possibleMove.charAt(0).toUpperCase() + possibleMove.slice(1), { sloppy: true });
@@ -171,8 +174,8 @@ client.on('message', (channel, tags, message, self) => {
       emitCandidates(game);
 
       // log the vote
-      const msg = `@${tags['display-name']} voted ${
-        move === 'resign' ? 'to resign.' : move === 'draw' ? 'to offer/accept a draw.' : `for ${move.san}`
+      const msg = `@${tags['display-name']} votou ${
+        move === 'resign' ? 'para desistir.' : move === 'draw' ? 'para oferecer/aceitar empate' : `para ${move.san}`
       }`;
       if (OPTS.ACKNOWLEDGE_VOTE) say(msg);
       else console.log(msg);
@@ -182,13 +185,11 @@ client.on('message', (channel, tags, message, self) => {
 
 function streamIncomingEvents() {
   const options = {
-    hostname: 'lichess.org',
-    path: '/api/stream/event',
     headers: { Authorization: `Bearer ${OPTS.BOT_LICHESS_OAUTH}` },
   };
 
   return new Promise((resolve, reject) => {
-    https.get(options, (res) => {
+    https.get('https://lichess.org/api/stream/event', options, (res) => {
       res.on('data', (chunk) => {
         let data = chunk.toString();
         try {
@@ -211,13 +212,11 @@ function streamIncomingEvents() {
 
 async function streamGameState(gameId) {
   const options = {
-    hostname: 'lichess.org',
-    path: `/api/bot/game/stream/${gameId}`,
     headers: { Authorization: `Bearer ${OPTS.BOT_LICHESS_OAUTH}` },
   };
 
   return new Promise((resolve, reject) => {
-    https.get(options, (res) => {
+    https.get(`https://lichess.org/api/bot/game/stream/${gameId}`, options, (res) => {
       res.on('data', async (chunk) => {
         let data = chunk.toString();
         if (!data.trim()) return;
@@ -248,7 +247,7 @@ async function streamGameState(gameId) {
                       chess.move(move, { sloppy: true });
                     }
                     streamerMove = chess.move(streamerMove, { sloppy: true });
-                    say(`Streamer played: ${streamerMove.san}`);
+                    say(`Streamer jogou: ${streamerMove.san}`);
                   }
 
                   await initiateVote(gameId, json.moves);
@@ -283,7 +282,7 @@ async function initiateVote(gameId, moves, revote = 0) {
   const game = games[gameId];
   if (!game) return;
   // say(revote ? `Nobody voted for a valid move! You have ${OPTS.VOTING_PERIOD} seconds to vote again. (${revote})` : `Voting time! You have ${OPTS.VOTING_PERIOD} seconds to name a move (UCI format, ex: e2e4).`);
-  if (!revote) say(`Voting time! You have ${OPTS.VOTING_PERIOD} seconds to name a move.`);
+  if (!revote) say(`Tempo de voto! Vocês têm ${OPTS.VOTING_PERIOD} segundos para dizer o movimento (em inglês).`);
   game.voters = new Set();
   game.offeringDraw = new Set();
   game.candidates = {};
@@ -306,13 +305,13 @@ async function initiateVote(gameId, moves, revote = 0) {
 
     if (winningMove[0] === 'resign') await resignGame(gameId);
     else await makeMove(gameId, winningMove[0], draw);
-    say(`Playing move: ${winningMove[1].san}`);
+    say(`Movimento jogado: ${winningMove[1].san}`);
   }, OPTS.VOTING_PERIOD * 1000);
 }
 
 async function beginGame(gameId) {
   try {
-    say('Game started!', gameId);
+    say('Jogo começou!', gameId);
     const game = {
       white: null,
       sloppyPGN: null,
@@ -327,17 +326,17 @@ async function beginGame(gameId) {
     delete games[gameId];
     switch (result) {
       case 'draw':
-        say("Game over - It's a draw!", gameId);
+        say("Fim do jogo - É um empate", gameId);
         break;
       case 'chat':
-        say('Chat wins! PogChamp', gameId);
+        say('Chat ganhou! PogChamp', gameId);
         break;
       case 'streamer':
-        say(`${OPTS.STREAMER_TWITCH} wins! Better luck next time chat.`, gameId);
+        say(`${OPTS.STREAMER_TWITCH} ganhou! Mais sorte para proxima pessoal!`, gameId);
         break;
       default:
         // should only happen if game state stops streaming for unknown reason
-        say('Game over.', gameId);
+        say('Fim do jogo.', gameId);
     }
   } catch (e) {
     console.error(e);
@@ -346,14 +345,12 @@ async function beginGame(gameId) {
 
 async function acceptChallenge(challengeId) {
   const options = {
-    hostname: 'lichess.org',
-    path: `/api/challenge/${challengeId}/accept`,
     headers: { Authorization: `Bearer ${OPTS.BOT_LICHESS_OAUTH}` },
     method: 'POST',
   };
 
   return new Promise((resolve, reject) => {
-    let req = https.request(options, (res) => {
+    let req = https.request(`https://lichess.org/api/challenge/${challengeId}/accept`, options, (res) => {
       res.on('data', (data) => {
         data = JSON.parse(data.toString());
         if (data.ok) {
@@ -374,14 +371,12 @@ async function acceptChallenge(challengeId) {
 
 async function resignGame(gameId) {
   const options = {
-    hostname: 'lichess.org',
-    path: `/api/bot/game/${gameId}/resign`,
     headers: { Authorization: `Bearer ${OPTS.BOT_LICHESS_OAUTH}` },
     method: 'POST',
   };
 
   return new Promise((resolve, reject) => {
-    const req = https.request(options, (res) => {
+    const req = https.request(`https://lichess.org/api/bot/game/${gameId}/resign`, options, (res) => {
       res.on('data', (data) => {
         data = JSON.parse(data.toString());
         if (data.ok) {
@@ -402,14 +397,12 @@ async function resignGame(gameId) {
 
 async function makeMove(gameId, move, draw = false) {
   const options = {
-    hostname: 'lichess.org',
-    path: `/api/bot/game/${gameId}/move/${move}?offeringDraw=${draw}`,
     headers: { Authorization: `Bearer ${OPTS.BOT_LICHESS_OAUTH}` },
     method: 'POST',
   };
 
   return new Promise((resolve, reject) => {
-    const req = https.request(options, (res) => {
+    const req = https.request(`https://lichess.org/api/bot/game/${gameId}/move/${move}?offeringDraw=${draw}`,options, (res) => {
       res.on('data', (data) => {
         data = JSON.parse(data.toString());
         if (data.ok) {
